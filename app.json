@@ -1,0 +1,26 @@
+{
+  "expo": {
+    "name": "Soloracer",
+    "slug": "soloracer",
+    "scheme": "soloracer",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "plugins": [
+      "expo-router",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Soloracer to use your location while you record or drive a trail."
+        }
+      ]
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.danielkocis.soloracer"
+    },
+    "android": {
+      "package": "com.danielkocis.soloracer"
+    }
+  }
+}
