@@ -1,4 +1,5 @@
 import * as SQLite from "expo-sqlite";
+import { polylineDistanceMeters } from "@/lib/geo";
 
 let database: SQLite.SQLiteDatabase | null = null;
 
@@ -72,6 +73,24 @@ export async function initDb() {
   `);
 }
 
+export type TrailRow = {
+  id: number;
+  name: string;
+  created_at: string;
+  distance_m: number;
+};
+
+export type TrailPointRow = {
+  id: number;
+  trail_id: number;
+  point_index: number;
+  latitude: number;
+  longitude: number;
+  altitude: number | null;
+  accuracy: number | null;
+  recorded_at: number;
+};
+
 export async function saveTrail(
   name: string,
   points: Array<{
@@ -83,10 +102,13 @@ export async function saveTrail(
   }>
 ) {
   const db = await getDb();
+  const distance = polylineDistanceMeters(points);
+
   const result = await db.runAsync(
-    "INSERT INTO trails (name, created_at) VALUES (?, ?)",
+    "INSERT INTO trails (name, created_at, distance_m) VALUES (?, ?, ?)",
     name,
-    new Date().toISOString()
+    new Date().toISOString(),
+    distance
   );
 
   const trailId = Number(result.lastInsertRowId);
@@ -112,10 +134,18 @@ export async function saveTrail(
 
 export async function getTrails() {
   const db = await getDb();
-  return db.getAllAsync<{
-    id: number;
-    name: string;
-    created_at: string;
-    distance_m: number;
-  }>("SELECT * FROM trails ORDER BY id DESC");
+  return db.getAllAsync<TrailRow>("SELECT * FROM trails ORDER BY id DESC");
+}
+
+export async function getTrail(id: number) {
+  const db = await getDb();
+  return db.getFirstAsync<TrailRow>("SELECT * FROM trails WHERE id = ?", id);
+}
+
+export async function getTrailPoints(trailId: number) {
+  const db = await getDb();
+  return db.getAllAsync<TrailPointRow>(
+    "SELECT * FROM trail_points WHERE trail_id = ? ORDER BY point_index ASC",
+    trailId
+  );
 }
