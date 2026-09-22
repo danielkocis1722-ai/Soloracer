@@ -1,5 +1,5 @@
 import * as Location from "expo-location";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Alert,
   Pressable,
@@ -8,9 +8,11 @@ import {
   TextInput,
   View
 } from "react-native";
+import MapView, { Marker, Polyline } from "react-native-maps";
 import { ensureForegroundLocationPermission, watchDrivingLocation } from "@/lib/gps";
 import { saveTrail } from "@/lib/db";
 import { colors } from "@/lib/theme";
+import { formatDistance, polylineDistanceMeters } from "@/lib/geo";
 
 type RecordedPoint = {
   latitude: number;
@@ -24,7 +26,13 @@ export default function CreateTrailScreen() {
   const [name, setName] = useState("");
   const [recording, setRecording] = useState(false);
   const [points, setPoints] = useState<RecordedPoint[]>([]);
+  const [accuracy, setAccuracy] = useState<number | null>(null);
   const subscription = useRef<Location.LocationSubscription | null>(null);
+  const mapRef = useRef<MapView | null>(null);
+
+  useEffect(() => {
+    return () => subscription.current?.remove();
+  }, []);
 
   async function startRecording() {
     if (!(await ensureForegroundLocationPermission())) {
@@ -34,16 +42,29 @@ export default function CreateTrailScreen() {
 
     setPoints([]);
     subscription.current = await watchDrivingLocation((location) => {
-      setPoints((current) => [
-        ...current,
+      const point: RecordedPoint = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        altitude: location.coords.altitude,
+        accuracy: location.coords.accuracy,
+        timestamp: location.timestamp
+      };
+
+      setAccuracy(location.coords.accuracy);
+      setPoints((current) => [...current, point]);
+
+      mapRef.current?.animateCamera(
         {
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
-          altitude: location.coords.altitude,
-          accuracy: location.coords.accuracy,
-          timestamp: location.timestamp
-        }
-      ]);
+          center: {
+            latitude: point.latitude,
+            longitude: point.longitude
+          },
+          zoom: 17,
+          heading: location.coords.heading ?? 0,
+          pitch: 20
+        },
+        { duration: 450 }
+      );
     });
     setRecording(true);
   }
@@ -60,71 +81,140 @@ export default function CreateTrailScreen() {
 
     const trailName = name.trim() || `Trail ${new Date().toLocaleDateString()}`;
     const id = await saveTrail(trailName, points);
-    Alert.alert("Trail saved", `${trailName} saved with ${points.length} GPS points (ID ${id}).`);
+    Alert.alert(
+      "Trail saved",
+      `${trailName} saved · ${formatDistance(polylineDistanceMeters(points))} · ${points.length} GPS points`
+    );
     setPoints([]);
     setName("");
+    setAccuracy(null);
   }
+
+  const firstPoint = points[0];
+  const lastPoint = points[points.length - 1];
+  const distance = polylineDistanceMeters(points);
 
   return (
     <View style={styles.container}>
-      <Text style={styles.label}>TRAIL NAME</Text>
-      <TextInput
-        value={name}
-        onChangeText={setName}
-        editable={!recording}
-        placeholder="Mountain Road"
-        placeholderTextColor={colors.muted}
-        style={styles.input}
-      />
+      <View style={styles.mapWrap}>
+        <MapView
+          ref={mapRef}
+          style={StyleSheet.absoluteFill}
+          showsUserLocation
+          showsMyLocationButton
+          loadingEnabled
+          mapType="standard"
+        >
+          {points.length > 1 && (
+            <Polyline
+              coordinates={points}
+              strokeColor={colors.accent}
+              strokeWidth={6}
+            />
+          )}
 
-      <View style={styles.status}>
-        <Text style={styles.statusTitle}>{recording ? "Recording route" : "Ready to record"}</Text>
-        <Text style={styles.statusValue}>{points.length} GPS points</Text>
-        <Text style={styles.hint}>
-          Start recording before entering the route. Keep Soloracer open while recording.
-        </Text>
+          {firstPoint && (
+            <Marker
+              coordinate={firstPoint}
+              title="START"
+              pinColor="#44C477"
+            />
+          )}
+
+          {lastPoint && points.length > 1 && (
+            <Marker
+              coordinate={lastPoint}
+              title="Current end"
+              pinColor={colors.accent}
+            />
+          )}
+        </MapView>
+
+        <View style={styles.mapBadge}>
+          <Text style={styles.mapBadgeText}>
+            {recording ? "● RECORDING" : "GPS MAP"}
+          </Text>
+        </View>
       </View>
 
-      <Pressable
-        style={[styles.button, recording && styles.stopButton]}
-        onPress={recording ? finishRecording : startRecording}
-      >
-        <Text style={styles.buttonText}>{recording ? "Finish Trail" : "Start Recording"}</Text>
-      </Pressable>
+      <View style={styles.panel}>
+        <TextInput
+          value={name}
+          onChangeText={setName}
+          editable={!recording}
+          placeholder="Trail name"
+          placeholderTextColor={colors.muted}
+          style={styles.input}
+        />
+
+        <View style={styles.metrics}>
+          <View>
+            <Text style={styles.metricLabel}>DISTANCE</Text>
+            <Text style={styles.metricValue}>{formatDistance(distance)}</Text>
+          </View>
+          <View>
+            <Text style={styles.metricLabel}>GPS POINTS</Text>
+            <Text style={styles.metricValue}>{points.length}</Text>
+          </View>
+          <View>
+            <Text style={styles.metricLabel}>ACCURACY</Text>
+            <Text style={styles.metricValue}>
+              {accuracy == null ? "—" : `±${accuracy.toFixed(0)} m`}
+            </Text>
+          </View>
+        </View>
+
+        <Pressable
+          style={[styles.button, recording && styles.stopButton]}
+          onPress={recording ? finishRecording : startRecording}
+        >
+          <Text style={styles.buttonText}>
+            {recording ? "Finish & Save Trail" : "Start Recording"}
+          </Text>
+        </Pressable>
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background, padding: 20, gap: 16 },
-  label: { color: colors.muted, fontSize: 12, fontWeight: "700", letterSpacing: 1.4 },
+  container: { flex: 1, backgroundColor: colors.background },
+  mapWrap: { flex: 1, minHeight: 360 },
+  mapBadge: {
+    position: "absolute",
+    top: 16,
+    left: 16,
+    backgroundColor: "rgba(9,10,12,0.86)",
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8
+  },
+  mapBadgeText: { color: colors.text, fontWeight: "900", fontSize: 11, letterSpacing: 1 },
+  panel: {
+    backgroundColor: colors.background,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    padding: 16,
+    gap: 14
+  },
   input: {
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.border,
     borderRadius: 14,
     color: colors.text,
-    padding: 16,
-    fontSize: 17
+    padding: 14,
+    fontSize: 16
   },
-  status: {
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 18,
-    padding: 20,
-    gap: 8
-  },
-  statusTitle: { color: colors.text, fontSize: 22, fontWeight: "800" },
-  statusValue: { color: colors.accent, fontSize: 34, fontWeight: "900" },
-  hint: { color: colors.muted, lineHeight: 20 },
+  metrics: { flexDirection: "row", justifyContent: "space-between", gap: 12 },
+  metricLabel: { color: colors.muted, fontSize: 10, fontWeight: "800", letterSpacing: 1 },
+  metricValue: { color: colors.text, fontSize: 18, fontWeight: "900", marginTop: 3 },
   button: {
-    marginTop: "auto",
     borderRadius: 16,
     backgroundColor: colors.accent,
-    paddingVertical: 18,
+    paddingVertical: 17,
     alignItems: "center"
   },
   stopButton: { backgroundColor: colors.danger },
-  buttonText: { color: "#FFFFFF", fontSize: 17, fontWeight: "900" }
+  buttonText: { color: "#FFFFFF", fontSize: 16, fontWeight: "900" }
 });
