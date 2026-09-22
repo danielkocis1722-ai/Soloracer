@@ -19,6 +19,7 @@ export default function RootLayout() {
       <Stack.Screen name="index" options={{ title: "Soloracer" }} />
       <Stack.Screen name="create-trail" options={{ title: "Create Trail" }} />
       <Stack.Screen name="trails" options={{ title: "Trails" }} />
+      <Stack.Screen name="trail/[id]" options={{ title: "Trail" }} />
       <Stack.Screen name="drive" options={{ title: "Drive" }} />
     </Stack>
   );
