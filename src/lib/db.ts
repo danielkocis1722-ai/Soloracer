@@ -231,3 +231,48 @@ export async function deleteTrail(trailId: number) {
     await db.runAsync("DELETE FROM trails WHERE id = ?", trailId);
   });
 }
+
+
+export async function createRun(trailId: number, startedAt: number) {
+  const db = await getDb();
+  const result = await db.runAsync(
+    "INSERT INTO runs (trail_id, started_at, sync_status) VALUES (?, ?, 'pending')",
+    trailId,
+    startedAt
+  );
+  return Number(result.lastInsertRowId);
+}
+
+export async function saveRunSplit(
+  runId: number,
+  checkpointId: number,
+  elapsedMs: number
+) {
+  const db = await getDb();
+  await db.runAsync(
+    "INSERT INTO run_splits (run_id, checkpoint_id, elapsed_ms) VALUES (?, ?, ?)",
+    runId,
+    checkpointId,
+    elapsedMs
+  );
+}
+
+export async function finishRun(
+  runId: number,
+  finishedAt: number,
+  elapsedMs: number,
+  avgSpeedKmh: number,
+  maxSpeedKmh: number
+) {
+  const db = await getDb();
+  await db.runAsync(
+    `UPDATE runs
+     SET finished_at = ?, elapsed_ms = ?, avg_speed_kmh = ?, max_speed_kmh = ?
+     WHERE id = ?`,
+    finishedAt,
+    elapsedMs,
+    avgSpeedKmh,
+    maxSpeedKmh,
+    runId
+  );
+}
