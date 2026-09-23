@@ -7,10 +7,26 @@ import {
 } from "@maplibre/maplibre-react-native";
 import { Stack, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
-import { getTrail, getTrailPoints, TrailPointRow, TrailRow } from "@/lib/db";
+import {
+  ActivityIndicator,
+  Alert,
+  Pressable,
+  StyleSheet,
+  Text,
+  View
+} from "react-native";
+import {
+  addCheckpoint,
+  CheckpointRow,
+  deleteCheckpoint,
+  getCheckpoints,
+  getTrail,
+  getTrailPoints,
+  TrailPointRow,
+  TrailRow
+} from "@/lib/db";
 import { colors } from "@/lib/theme";
-import { formatDistance } from "@/lib/geo";
+import { distanceBetweenMeters, formatDistance } from "@/lib/geo";
 import { MAP_STYLE_URL, toLineFeature, toLngLat } from "@/lib/map";
 
 function boundsFromPoints(points: TrailPointRow[]): [number, number, number, number] | undefined {
@@ -27,21 +43,56 @@ function boundsFromPoints(points: TrailPointRow[]): [number, number, number, num
   ];
 }
 
+function nearestTrailPoint(
+  latitude: number,
+  longitude: number,
+  points: TrailPointRow[]
+) {
+  if (points.length === 0) return undefined;
+
+  let nearest = points[0];
+  let nearestDistance = distanceBetweenMeters(
+    { latitude, longitude },
+    nearest
+  );
+
+  for (let index = 1; index < points.length; index += 1) {
+    const distance = distanceBetweenMeters(
+      { latitude, longitude },
+      points[index]
+    );
+
+    if (distance < nearestDistance) {
+      nearest = points[index];
+      nearestDistance = distance;
+    }
+  }
+
+  return { point: nearest, distance: nearestDistance };
+}
+
 export default function TrailDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const trailId = Number(id);
   const [trail, setTrail] = useState<TrailRow | null>(null);
   const [points, setPoints] = useState<TrailPointRow[]>([]);
+  const [checkpoints, setCheckpoints] = useState<CheckpointRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editingCheckpoints, setEditingCheckpoints] = useState(false);
+
+  async function refreshCheckpoints() {
+    setCheckpoints(await getCheckpoints(trailId));
+  }
 
   useEffect(() => {
     let active = true;
 
-    Promise.all([getTrail(trailId), getTrailPoints(trailId)])
-      .then(([trailRow, pointRows]) => {
+    Promise.all([getTrail(trailId), getTrailPoints(trailId), getCheckpoints(trailId)])
+      .then(([trailRow, pointRows, checkpointRows]) => {
         if (!active) return;
         setTrail(trailRow ?? null);
         setPoints(pointRows);
+        setCheckpoints(checkpointRows);
       })
       .catch(console.error)
       .finally(() => active && setLoading(false));
@@ -53,6 +104,45 @@ export default function TrailDetailScreen() {
 
   const bounds = useMemo(() => boundsFromPoints(points), [points]);
   const routeFeature = useMemo(() => toLineFeature(points), [points]);
+
+  async function handleMapPress(latitude: number, longitude: number) {
+    if (!editingCheckpoints || points.length === 0) return;
+
+    const nearest = nearestTrailPoint(latitude, longitude, points);
+    if (!nearest) return;
+
+    // Prevent accidental checkpoints far away from the recorded trail.
+    if (nearest.distance > 100) {
+      Alert.alert("Too far from trail", "Tap closer to the recorded route.");
+      return;
+    }
+
+    await addCheckpoint(
+      trailId,
+      nearest.point.latitude,
+      nearest.point.longitude
+    );
+    await refreshCheckpoints();
+  }
+
+  async function handleDeleteCheckpoint(checkpoint: CheckpointRow) {
+    if (!editingCheckpoints) return;
+
+    Alert.alert(
+      `Delete ${checkpoint.name}?`,
+      "This checkpoint will be removed from the trail.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            void deleteCheckpoint(checkpoint.id, trailId).then(refreshCheckpoints);
+          }
+        }
+      ]
+    );
+  }
 
   if (loading) {
     return (
@@ -84,12 +174,16 @@ export default function TrailDetailScreen() {
         attribution
         compass
         compassPosition={{ top: 16, right: 16 }}
+        onPress={(event) => {
+          const [longitude, latitude] = event.nativeEvent.lngLat;
+          void handleMapPress(latitude, longitude);
+        }}
       >
         {bounds && (
           <Camera
             initialViewState={{
               bounds,
-              padding: { top: 80, right: 50, bottom: 210, left: 50 }
+              padding: { top: 80, right: 50, bottom: 245, left: 50 }
             }}
           />
         )}
@@ -128,7 +222,38 @@ export default function TrailDetailScreen() {
             </View>
           </ViewAnnotation>
         )}
+
+        {checkpoints.map((checkpoint) => (
+          <ViewAnnotation
+            key={checkpoint.id}
+            lngLat={toLngLat(checkpoint)}
+            anchor="center"
+            onPress={(event) => {
+              event.stopPropagation();
+              void handleDeleteCheckpoint(checkpoint);
+            }}
+          >
+            <View
+              style={[
+                styles.marker,
+                styles.checkpointMarker,
+                editingCheckpoints && styles.checkpointMarkerEditing
+              ]}
+            >
+              <Text style={styles.markerText}>{checkpoint.checkpoint_order}</Text>
+            </View>
+          </ViewAnnotation>
+        ))}
       </Map>
+
+      {editingCheckpoints && (
+        <View style={styles.editBanner}>
+          <Text style={styles.editBannerTitle}>Checkpoint editor</Text>
+          <Text style={styles.editBannerText}>
+            Tap near the orange route to add a checkpoint. Tap a checkpoint to delete it.
+          </Text>
+        </View>
+      )}
 
       <View style={styles.infoCard}>
         <View style={styles.metricsRow}>
@@ -137,17 +262,32 @@ export default function TrailDetailScreen() {
             <Text style={styles.value}>{formatDistance(trail.distance_m)}</Text>
           </View>
           <View>
+            <Text style={styles.label}>CHECKPOINTS</Text>
+            <Text style={styles.value}>{checkpoints.length}</Text>
+          </View>
+          <View>
             <Text style={styles.label}>GPS POINTS</Text>
             <Text style={styles.value}>{points.length}</Text>
           </View>
         </View>
 
-        <View style={styles.editorHint}>
-          <Text style={styles.hintTitle}>Next: checkpoint editor</Text>
-          <Text style={styles.hintText}>
-            START and FINISH are shown from the recorded route. Next we will make them editable and add checkpoints directly on the route.
+        <Pressable
+          style={[
+            styles.editorButton,
+            editingCheckpoints && styles.editorButtonActive
+          ]}
+          onPress={() => setEditingCheckpoints((current) => !current)}
+        >
+          <Text style={styles.editorButtonText}>
+            {editingCheckpoints ? "Done editing" : "Edit checkpoints"}
           </Text>
-        </View>
+        </Pressable>
+
+        <Text style={styles.hintText}>
+          {editingCheckpoints
+            ? "New checkpoints snap to the nearest recorded GPS point on this trail."
+            : "START and FINISH come from the recorded route. Add checkpoints before using timed Drive mode."}
+        </Text>
       </View>
     </View>
   );
@@ -173,10 +313,38 @@ const styles = StyleSheet.create({
   },
   startMarker: { backgroundColor: colors.success },
   finishMarker: { backgroundColor: colors.danger },
+  checkpointMarker: { backgroundColor: "#1F6FEB" },
+  checkpointMarkerEditing: {
+    width: 34,
+    height: 34,
+    borderRadius: 17
+  },
   markerText: {
     color: "#FFFFFF",
     fontSize: 12,
     fontWeight: "900"
+  },
+  editBanner: {
+    position: "absolute",
+    top: 16,
+    left: 16,
+    right: 80,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    backgroundColor: "rgba(9,10,12,0.94)",
+    borderWidth: 1,
+    borderColor: colors.accent
+  },
+  editBannerTitle: {
+    color: colors.accent,
+    fontWeight: "900"
+  },
+  editBannerText: {
+    marginTop: 2,
+    color: colors.text,
+    fontSize: 12,
+    lineHeight: 17
   },
   infoCard: {
     position: "absolute",
@@ -185,7 +353,7 @@ const styles = StyleSheet.create({
     bottom: 18,
     borderRadius: 18,
     padding: 16,
-    gap: 10,
+    gap: 12,
     backgroundColor: "rgba(9,10,12,0.94)",
     borderWidth: 1,
     borderColor: colors.border
@@ -205,19 +373,25 @@ const styles = StyleSheet.create({
     fontSize: 21,
     fontWeight: "900"
   },
-  editorHint: {
-    marginTop: 4,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
-    gap: 4
+  editorButton: {
+    minHeight: 46,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.accent
   },
-  hintTitle: {
-    color: colors.accent,
+  editorButtonActive: {
+    backgroundColor: "#2A2D33",
+    borderWidth: 1,
+    borderColor: colors.accent
+  },
+  editorButtonText: {
+    color: "#FFFFFF",
+    fontSize: 15,
     fontWeight: "900"
   },
   hintText: {
     color: colors.muted,
-    lineHeight: 19
+    lineHeight: 18
   }
 });
