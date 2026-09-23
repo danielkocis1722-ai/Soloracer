@@ -22,7 +22,17 @@
       "bundleIdentifier": "com.danielkocis.soloracer"
     },
     "android": {
-      "package": "com.danielkocis.soloracer"
+      "package": "com.danielkocis.soloracer",
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "3361ec16-0f6d-4cfb-88ba-b7e63e047b44"
+      }
     }
   }
 }
