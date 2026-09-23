@@ -90,6 +90,34 @@ export default function DriveScreen() {
   }, []);
 
   useEffect(() => {
+    let active = true;
+
+    async function loadCurrentPosition() {
+      try {
+        if (!(await ensureForegroundLocationPermission())) return;
+
+        const current = await Location.getCurrentPositionAsync({
+          accuracy: Location.Accuracy.BestForNavigation
+        });
+
+        if (!active) return;
+
+        setPosition(current);
+        setAccuracy(current.coords.accuracy);
+        setSpeed(speedToKmh(current.coords.speed));
+      } catch (error) {
+        console.error("Failed to get current position", error);
+      }
+    }
+
+    void loadCurrentPosition();
+
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
     selectedTrailIdRef.current = selectedTrailId;
 
     if (selectedTrailId == null) {
