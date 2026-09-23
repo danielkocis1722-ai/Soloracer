@@ -91,6 +91,16 @@ export type TrailPointRow = {
   recorded_at: number;
 };
 
+export type CheckpointRow = {
+  id: number;
+  trail_id: number;
+  name: string;
+  latitude: number;
+  longitude: number;
+  radius_m: number;
+  checkpoint_order: number;
+};
+
 export async function saveTrail(
   name: string,
   points: Array<{
@@ -148,4 +158,56 @@ export async function getTrailPoints(trailId: number) {
     "SELECT * FROM trail_points WHERE trail_id = ? ORDER BY point_index ASC",
     trailId
   );
+}
+
+export async function getCheckpoints(trailId: number) {
+  const db = await getDb();
+  return db.getAllAsync<CheckpointRow>(
+    "SELECT * FROM checkpoints WHERE trail_id = ? ORDER BY checkpoint_order ASC",
+    trailId
+  );
+}
+
+export async function addCheckpoint(
+  trailId: number,
+  latitude: number,
+  longitude: number,
+  radiusM = 20
+) {
+  const db = await getDb();
+  const last = await db.getFirstAsync<{ max_order: number | null }>(
+    "SELECT MAX(checkpoint_order) AS max_order FROM checkpoints WHERE trail_id = ?",
+    trailId
+  );
+  const order = (last?.max_order ?? 0) + 1;
+
+  const result = await db.runAsync(
+    `INSERT INTO checkpoints
+     (trail_id, name, latitude, longitude, radius_m, checkpoint_order)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    trailId,
+    `CP${order}`,
+    latitude,
+    longitude,
+    radiusM,
+    order
+  );
+
+  return Number(result.lastInsertRowId);
+}
+
+export async function deleteCheckpoint(checkpointId: number, trailId: number) {
+  const db = await getDb();
+  await db.runAsync("DELETE FROM checkpoints WHERE id = ? AND trail_id = ?", checkpointId, trailId);
+
+  const remaining = await getCheckpoints(trailId);
+  for (let index = 0; index < remaining.length; index += 1) {
+    const order = index + 1;
+    await db.runAsync(
+      "UPDATE checkpoints SET checkpoint_order = ?, name = ? WHERE id = ?",
+      order,
+      `CP${order}`,
+      remaining[index].id
+    );
+  }
 }
