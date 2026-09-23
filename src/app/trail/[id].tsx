@@ -5,7 +5,7 @@ import {
   Map,
   ViewAnnotation
 } from "@maplibre/maplibre-react-native";
-import { Stack, useLocalSearchParams } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import {
   ActivityIndicator,
@@ -19,6 +19,7 @@ import {
   addCheckpoint,
   CheckpointRow,
   deleteCheckpoint,
+  deleteTrail,
   getCheckpoints,
   getTrail,
   getTrailPoints,
@@ -68,12 +69,17 @@ function nearestTrailPoint(
     }
   }
 
-  return { point: nearest, distance: nearestDistance };
+  return {
+    point: nearest,
+    distance: nearestDistance,
+    index: points.findIndex((point) => point.id === nearest.id)
+  };
 }
 
 export default function TrailDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const trailId = Number(id);
+  const router = useRouter();
   const [trail, setTrail] = useState<TrailRow | null>(null);
   const [points, setPoints] = useState<TrailPointRow[]>([]);
   const [checkpoints, setCheckpoints] = useState<CheckpointRow[]>([]);
@@ -117,6 +123,25 @@ export default function TrailDetailScreen() {
       return;
     }
 
+    const start = points[0];
+    const finish = points[points.length - 1];
+    const endpointGuardM = 50;
+
+    const nearStart =
+      nearest.index === 0 ||
+      distanceBetweenMeters(nearest.point, start) < endpointGuardM;
+    const nearFinish =
+      nearest.index === points.length - 1 ||
+      distanceBetweenMeters(nearest.point, finish) < endpointGuardM;
+
+    if (nearStart || nearFinish) {
+      Alert.alert(
+        "Start / finish zone",
+        "Checkpoint cannot be placed within 50 m of START or FINISH."
+      );
+      return;
+    }
+
     await addCheckpoint(
       trailId,
       nearest.point.latitude,
@@ -138,6 +163,28 @@ export default function TrailDetailScreen() {
           style: "destructive",
           onPress: () => {
             void deleteCheckpoint(checkpoint.id, trailId).then(refreshCheckpoints);
+          }
+        }
+      ]
+    );
+  }
+
+  function handleDeleteTrail() {
+    Alert.alert(
+      "Delete trail?",
+      `"${trail?.name ?? "Trail"}" and its checkpoints/runs will be permanently deleted from this device.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: () => {
+            void deleteTrail(trailId)
+              .then(() => router.replace("/trails"))
+              .catch((error) => {
+                console.error(error);
+                Alert.alert("Delete failed", "Could not delete this trail.");
+              });
           }
         }
       ]
@@ -285,9 +332,15 @@ export default function TrailDetailScreen() {
 
         <Text style={styles.hintText}>
           {editingCheckpoints
-            ? "New checkpoints snap to the nearest recorded GPS point on this trail."
+            ? "New checkpoints snap to the nearest recorded GPS point. START and FINISH have a protected 50 m zone."
             : "START and FINISH come from the recorded route. Add checkpoints before using timed Drive mode."}
         </Text>
+
+        {!editingCheckpoints && (
+          <Pressable style={styles.deleteButton} onPress={handleDeleteTrail}>
+            <Text style={styles.deleteButtonText}>Delete trail</Text>
+          </Pressable>
+        )}
       </View>
     </View>
   );
@@ -393,5 +446,19 @@ const styles = StyleSheet.create({
   hintText: {
     color: colors.muted,
     lineHeight: 18
+  },
+  deleteButton: {
+    minHeight: 42,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: colors.danger,
+    backgroundColor: "rgba(255,77,79,0.08)"
+  },
+  deleteButtonText: {
+    color: colors.danger,
+    fontWeight: "900",
+    fontSize: 14
   }
 });
