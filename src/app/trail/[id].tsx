@@ -1,10 +1,31 @@
+import {
+  Camera,
+  GeoJSONSource,
+  Layer,
+  Map,
+  ViewAnnotation
+} from "@maplibre/maplibre-react-native";
 import { Stack, useLocalSearchParams } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
-import MapView, { Marker, Polyline } from "react-native-maps";
 import { getTrail, getTrailPoints, TrailPointRow, TrailRow } from "@/lib/db";
 import { colors } from "@/lib/theme";
 import { formatDistance } from "@/lib/geo";
+import { MAP_STYLE_URL, toLineFeature, toLngLat } from "@/lib/map";
+
+function boundsFromPoints(points: TrailPointRow[]): [number, number, number, number] | undefined {
+  if (points.length === 0) return undefined;
+
+  const longitudes = points.map((point) => point.longitude);
+  const latitudes = points.map((point) => point.latitude);
+
+  return [
+    Math.min(...longitudes),
+    Math.min(...latitudes),
+    Math.max(...longitudes),
+    Math.max(...latitudes)
+  ];
+}
 
 export default function TrailDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -12,7 +33,6 @@ export default function TrailDetailScreen() {
   const [trail, setTrail] = useState<TrailRow | null>(null);
   const [points, setPoints] = useState<TrailPointRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const mapRef = useRef<MapView | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -31,18 +51,8 @@ export default function TrailDetailScreen() {
     };
   }, [trailId]);
 
-  useEffect(() => {
-    if (points.length < 2) return;
-
-    const timeout = setTimeout(() => {
-      mapRef.current?.fitToCoordinates(points, {
-        edgePadding: { top: 80, right: 50, bottom: 80, left: 50 },
-        animated: true
-      });
-    }, 250);
-
-    return () => clearTimeout(timeout);
-  }, [points]);
+  const bounds = useMemo(() => boundsFromPoints(points), [points]);
+  const routeFeature = useMemo(() => toLineFeature(points), [points]);
 
   if (loading) {
     return (
@@ -67,47 +77,75 @@ export default function TrailDetailScreen() {
     <View style={styles.container}>
       <Stack.Screen options={{ title: trail.name }} />
 
-      <MapView ref={mapRef} style={StyleSheet.absoluteFill} loadingEnabled>
-        {points.length > 1 && (
-          <Polyline
-            coordinates={points}
-            strokeColor={colors.accent}
-            strokeWidth={6}
+      <Map
+        style={StyleSheet.absoluteFill}
+        mapStyle={MAP_STYLE_URL}
+        logo
+        attribution
+        compass
+        compassPosition={{ top: 16, right: 16 }}
+      >
+        {bounds && (
+          <Camera
+            initialViewState={{
+              bounds,
+              padding: { top: 80, right: 50, bottom: 210, left: 50 }
+            }}
           />
+        )}
+
+        {points.length > 1 && (
+          <GeoJSONSource id="saved-route" data={routeFeature}>
+            <Layer
+              id="saved-route-line"
+              type="line"
+              source="saved-route"
+              paint={{
+                "line-color": colors.accent,
+                "line-width": 6,
+                "line-opacity": 0.95
+              }}
+              layout={{
+                "line-cap": "round",
+                "line-join": "round"
+              }}
+            />
+          </GeoJSONSource>
         )}
 
         {start && (
-          <Marker
-            coordinate={start}
-            title="START"
-            description="Recorded trail start"
-            pinColor="#44C477"
-          />
+          <ViewAnnotation lngLat={toLngLat(start)} anchor="center">
+            <View style={[styles.marker, styles.startMarker]}>
+              <Text style={styles.markerText}>S</Text>
+            </View>
+          </ViewAnnotation>
         )}
 
         {finish && (
-          <Marker
-            coordinate={finish}
-            title="FINISH"
-            description="Recorded trail finish"
-            pinColor="#FF4D4F"
-          />
+          <ViewAnnotation lngLat={toLngLat(finish)} anchor="center">
+            <View style={[styles.marker, styles.finishMarker]}>
+              <Text style={styles.markerText}>F</Text>
+            </View>
+          </ViewAnnotation>
         )}
-      </MapView>
+      </Map>
 
       <View style={styles.infoCard}>
-        <View>
-          <Text style={styles.label}>DISTANCE</Text>
-          <Text style={styles.value}>{formatDistance(trail.distance_m)}</Text>
+        <View style={styles.metricsRow}>
+          <View>
+            <Text style={styles.label}>DISTANCE</Text>
+            <Text style={styles.value}>{formatDistance(trail.distance_m)}</Text>
+          </View>
+          <View>
+            <Text style={styles.label}>GPS POINTS</Text>
+            <Text style={styles.value}>{points.length}</Text>
+          </View>
         </View>
-        <View>
-          <Text style={styles.label}>GPS POINTS</Text>
-          <Text style={styles.value}>{points.length}</Text>
-        </View>
+
         <View style={styles.editorHint}>
           <Text style={styles.hintTitle}>Next: checkpoint editor</Text>
           <Text style={styles.hintText}>
-            START and FINISH are shown from the recorded route. Next we will make them editable and add checkpoint placement directly on this map.
+            START and FINISH are shown from the recorded route. Next we will make them editable and add checkpoints directly on the route.
           </Text>
         </View>
       </View>
@@ -124,6 +162,22 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background
   },
   empty: { color: colors.muted },
+  marker: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 3,
+    borderColor: "#FFFFFF",
+    alignItems: "center",
+    justifyContent: "center"
+  },
+  startMarker: { backgroundColor: colors.success },
+  finishMarker: { backgroundColor: colors.danger },
+  markerText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "900"
+  },
   infoCard: {
     position: "absolute",
     left: 16,
@@ -132,12 +186,25 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     padding: 16,
     gap: 10,
-    backgroundColor: "rgba(9,10,12,0.92)",
+    backgroundColor: "rgba(9,10,12,0.94)",
     borderWidth: 1,
     borderColor: colors.border
   },
-  label: { color: colors.muted, fontSize: 10, fontWeight: "800", letterSpacing: 1 },
-  value: { color: colors.text, fontSize: 21, fontWeight: "900" },
+  metricsRow: {
+    flexDirection: "row",
+    justifyContent: "space-between"
+  },
+  label: {
+    color: colors.muted,
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 1
+  },
+  value: {
+    color: colors.text,
+    fontSize: 21,
+    fontWeight: "900"
+  },
   editorHint: {
     marginTop: 4,
     paddingTop: 12,
@@ -145,6 +212,12 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
     gap: 4
   },
-  hintTitle: { color: colors.accent, fontWeight: "900" },
-  hintText: { color: colors.muted, lineHeight: 19 }
+  hintTitle: {
+    color: colors.accent,
+    fontWeight: "900"
+  },
+  hintText: {
+    color: colors.muted,
+    lineHeight: 19
+  }
 });
