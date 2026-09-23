@@ -15,6 +15,7 @@ export async function initDb() {
 
   await db.execAsync(`
     PRAGMA journal_mode = WAL;
+    PRAGMA foreign_keys = ON;
 
     CREATE TABLE IF NOT EXISTS trails (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -198,7 +199,11 @@ export async function addCheckpoint(
 
 export async function deleteCheckpoint(checkpointId: number, trailId: number) {
   const db = await getDb();
-  await db.runAsync("DELETE FROM checkpoints WHERE id = ? AND trail_id = ?", checkpointId, trailId);
+  await db.runAsync(
+    "DELETE FROM checkpoints WHERE id = ? AND trail_id = ?",
+    checkpointId,
+    trailId
+  );
 
   const remaining = await getCheckpoints(trailId);
   for (let index = 0; index < remaining.length; index += 1) {
@@ -210,4 +215,19 @@ export async function deleteCheckpoint(checkpointId: number, trailId: number) {
       remaining[index].id
     );
   }
+}
+
+export async function deleteTrail(trailId: number) {
+  const db = await getDb();
+
+  await db.withTransactionAsync(async () => {
+    await db.runAsync(
+      "DELETE FROM run_splits WHERE run_id IN (SELECT id FROM runs WHERE trail_id = ?)",
+      trailId
+    );
+    await db.runAsync("DELETE FROM runs WHERE trail_id = ?", trailId);
+    await db.runAsync("DELETE FROM checkpoints WHERE trail_id = ?", trailId);
+    await db.runAsync("DELETE FROM trail_points WHERE trail_id = ?", trailId);
+    await db.runAsync("DELETE FROM trails WHERE id = ?", trailId);
+  });
 }
